@@ -1,196 +1,314 @@
-import { profileFor, LOLLIPOP_COST } from './flavors.js';
+// One business day, simulated customer by customer. Pure: it takes the
+// day's inputs plus a seeded random function and returns what happened,
+// including a per-customer log that the animated day replays.
+
 import { randInt } from './rng.js';
+import { LOLLIPOP_PRICE, LOLLIPOP_COST } from './flavors.js';
 
-export const LOLLIPOP_PRICE = 1.0;
+const FIRST = ['Maya', 'Leo', 'Ava', 'Noah', 'Zoe', 'Eli', 'Mia', 'Sam', 'Ivy', 'Max',
+  'Ruby', 'Theo', 'Lily', 'Owen', 'Nora', 'Jack', 'Emma', 'Finn', 'Aria', 'Cole',
+  'Rosa', 'Kai', 'Jade', 'Omar', 'Lena', 'Hugo', 'Tess', 'Ravi', 'Gus', 'Pia'];
 
-const CUSTOMER_NAMES = [
-  'Maya Lopez', 'Leo Park', 'Ava Chen', 'Noah Reyes', 'Zoe Kim', 'Eli Brooks',
-  'Mia Torres', 'Sam Patel', 'Ivy Nguyen', 'Max Romano', 'Ruby Hayes',
-  'Theo Walsh', 'Lily Adams', 'Owen Diaz', 'Nora Bell', 'Jack Mori',
-  'Emma Frost', 'Finn Olsen', 'Aria Singh', 'Cole Watts',
-];
+const QUOTES = {
+  loved: [
+    'The {f} is amazing, and what a deal!',
+    "Can't believe {f} is this cheap. Coming back tomorrow!",
+    'Best {f} in town, easy.',
+    'Mmm, {f}! Great price too.',
+  ],
+  lovedExotic: [
+    '{f}?? Incredible. Taking a picture for my friends!',
+    "I've never tasted anything like {f}!",
+    'Okay, {f} is my new favorite thing.',
+    'Weird... but SO good. {f} forever!',
+  ],
+  mixed: [
+    'The {f} was good. Fair price.',
+    'Solid {f}. No complaints.',
+    'I liked the {f}.',
+    '{f} was tasty.',
+  ],
+  grumble: [
+    'The {f} is good, but wow, that price.',
+    'Not sure {f} is worth that much.',
+    'My allowance does not like this price.',
+    "That's a lot for one scoop of {f}.",
+  ],
+  walked: [
+    '{p} for {f}? No thanks.',
+    "Too expensive for me. I'll skip it.",
+    "Hmm, {p}? Maybe somewhere else.",
+  ],
+  nothing: [
+    "Nothing on the menu for me today.",
+    "Hmm, I don't really like any of these.",
+    'Do you have anything less... unusual?',
+  ],
+  flop: [
+    'Hmm. The {f} tastes a little funny.',
+    "I don't think {f} is for me.",
+  ],
+  fan: [
+    "I come here just for the {f}!",
+    'My usual {f}, please!',
+    'Back again for {f}. I told everyone about it.',
+  ],
+  deal: [
+    'Best prices on the block!',
+    'Cheap and tasty. My favorite kind of shop.',
+  ],
+};
 
-const LOVED_QUOTES = [
-  'The {f} is amazing — and what a deal!',
-  "Can't believe {f} is this cheap. I'm coming back tomorrow.",
-  'Best {f} in town, easy. Great price too.',
-  '{f}?? Incredible. Took a picture for my friends.',
-];
-const MIXED_QUOTES = [
-  'The {f} was good. Fair price, I guess.',
-  'Solid {f}. Nothing to complain about.',
-  'I liked the {f}. About what I expected to pay.',
-  '{f} was tasty. Decent value.',
-];
-const COMPLAINT_QUOTES = [
-  'The {f} is good but wow, that price.',
-  "Not sure {f} is worth that much, honestly.",
-  'I love {f} but my allowance disagrees with this price.',
-  "That's a lot for a scoop of {f}.",
-];
+function quote(kind, rand, f, p) {
+  const pool = QUOTES[kind];
+  return pool[Math.floor(rand() * pool.length)]
+    .replace('{f}', f || 'ice cream')
+    .replace('{p}', p != null ? `$${p.toFixed(2)}` : '');
+}
 
 function priceTone(price, ceiling) {
-  const ratio = price / ceiling;
-  if (ratio < 0.88) return 'loved';
-  if (ratio <= 1.15) return 'mixed';
-  return 'complaint';
+  const r = price / ceiling;
+  if (r < 0.88) return 'loved';
+  if (r <= 1.12) return 'mixed';
+  return 'grumble';
 }
 
-function satisfactionFactor(tone) {
-  return tone === 'loved' ? 1 : tone === 'mixed' ? 0.55 : 0.1;
+const HAPPY = { loved: 1, mixed: 0.65, grumble: 0.25, flop: 0.3, walked: 0, nothing: 0.1 };
+
+export function averagePrice(menuAll, prices) {
+  if (menuAll.length === 0) return 0;
+  return menuAll.reduce((s, f) => s + (prices[f] ?? 3), 0) / menuAll.length;
 }
 
-// Simulates one full business day. Pure with respect to game state: returns
-// results plus the updated buzz map and reputation gain; the caller commits.
-export function simulateDay({
-  regular, featured, prices, buzz, event, repTierIndex, collabFlavor,
-  easyMode = false, incidentMult = 1,
-}) {
+export function simulateDay(input, rand, T) {
+  const {
+    regular, featured, prices, profiles, mods = {}, buzz = {}, fans = {},
+    dealFans = 0, fame = 0, event, crowdMult = 1,
+  } = input;
   const menuAll = [...regular, ...featured].filter(Boolean);
-  const profiles = Object.fromEntries(menuAll.map((f) => [f, profileFor(f)]));
+  const avgPrice = averagePrice(menuAll, prices);
 
-  // Easy mode: ingredient costs are switched off, so profit ≈ revenue and the
-  // 6-year-old can't slide into the red.
-  const costMult = easyMode ? 0 : 1;
-
-  // Easy mode also brings a slightly bigger, friendlier crowd.
-  const baseCount = easyMode ? randInt(18, 26) : randInt(14, 22);
-  const customerCount = Math.max(
+  // ---- who shows up --------------------------------------------------------
+  const valueMult = Math.max(
+    T.valueMin,
+    Math.min(T.valueMax, Math.pow(T.refPrice / Math.max(0.5, avgPrice), T.valueExp)),
+  );
+  const fameMult = 1 + (fame / 100) * T.fameCrowd;
+  const walkIns = Math.max(
     1,
-    Math.round(
-      baseCount * event.mult * incidentMult * (1 + Math.max(0, repTierIndex + 1) * 0.12),
-    ),
+    Math.round(randInt(T.walkInMin, T.walkInMax, rand) * event.mult * crowdMult * valueMult * fameMult),
   );
 
-  const scoops = Object.fromEntries(menuAll.map((f) => [f, 0]));
-  const flavorRevenue = Object.fromEntries(menuAll.map((f) => [f, 0]));
-  let lollipops = 0;
-  const reactions = [];
+  const mix = { ...T.segmentMix };
+  if (event.segment) {
+    for (const k of Object.keys(mix)) mix[k] *= 1 - T.segmentEventShift;
+    mix[event.segment] += T.segmentEventShift;
+  }
+  const drawSegment = () => {
+    const r = rand();
+    if (r < mix.kids) return 'kids';
+    if (r < mix.kids + mix.everyone) return 'everyone';
+    return 'adventurous';
+  };
 
-  for (let i = 0; i < customerCount; i++) {
+  const queue = [];
+  for (let i = 0; i < walkIns; i++) queue.push({ kind: 'walkin', seg: drawSegment() });
+
+  // Loyal fans are less bothered by weather.
+  const weatherSoft = Math.pow(event.mult, 0.3);
+  for (const [f, n] of Object.entries(fans)) {
+    if (!menuAll.includes(f) || n <= 0) continue;
+    const expected = n * T.fanVisitRate * weatherSoft * Math.min(1.3, crowdMult);
+    const count = Math.floor(expected) + (rand() < expected % 1 ? 1 : 0);
+    for (let i = 0; i < count; i++) queue.push({ kind: 'fan', seg: 'adventurous', fanOf: f });
+  }
+  const dealAppeal = Math.max(0, Math.min(1, (T.dealPrice - avgPrice) / 0.9));
+  const dealExpected = dealFans * T.dealVisitRate * Math.pow(event.mult, 0.6) * (0.3 + 0.7 * dealAppeal);
+  const dealCount = Math.floor(dealExpected) + (rand() < dealExpected % 1 ? 1 : 0);
+  for (let i = 0; i < dealCount; i++) queue.push({ kind: 'deal', seg: drawSegment() });
+
+  // Shuffle arrival order so fans and walk-ins mix in the animation.
+  for (let i = queue.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [queue[i], queue[j]] = [queue[j], queue[i]];
+  }
+
+  // ---- serve them ----------------------------------------------------------
+  const zero = () => Object.fromEntries(menuAll.map((f) => [f, 0]));
+  const scoops = zero();
+  const flavorRevenue = zero();
+  const flavorCost = zero();
+  const flavorHappy = zero();
+  const flavorLoved = zero();
+  let lollipops = 0;
+  const tally = { loved: 0, mixed: 0, grumble: 0, flop: 0, walked: 0, nothing: 0 };
+  let happySum = 0;
+  let happyStd = 0;
+  let happyExotic = 0;
+  const log = [];
+
+  for (const cust of queue) {
+    const name = FIRST[Math.floor(rand() * FIRST.length)];
+    const entry = { kind: cust.kind, seg: cust.seg, name, look: Math.floor(rand() * 1e6) };
+    if (menuAll.length === 0) {
+      entry.outcome = 'nothing';
+      tally.nothing++;
+      log.push(entry);
+      continue;
+    }
+
     const weights = menuAll.map((f) => {
       const prof = profiles[f];
       const price = prices[f] ?? 3;
-      const sensitivity = prof.exotic ? 0.8 : 1.0;
-      const priceEffect = Math.max(0.05, 1 - (price - 2.5) * sensitivity * 0.18);
-      const segmentBoost = event.segment && prof.segment === event.segment ? 1.45 : 1.0;
+      let sens = prof.exotic ? 0.8 : 1.0;
+      if (cust.kind === 'deal') sens *= 2;
+      const priceEffect = Math.max(0.05, 1 - (price - 2.5) * sens * 0.18);
+      const aff = T.affinity[cust.seg][prof.segment];
       const featuredBoost = featured.includes(f) ? 1.25 : 1.0;
       const buzzEffect = 1 + Math.min((buzz[f] || 0) * 0.45, 0.9);
-      return prof.base * priceEffect * segmentBoost * featuredBoost * buzzEffect;
+      const mod = mods[f]?.demandMult ?? 1;
+      const fanBoost = cust.fanOf === f ? 6 : 1;
+      return prof.base * priceEffect * aff * featuredBoost * buzzEffect * mod * fanBoost;
     });
 
-    if (menuAll.length === 0) break;
+    // Some customers don't find anything that appeals to them.
+    const best = Math.max(...weights);
+    const buyChance = cust.kind === 'walkin' ? Math.max(0.12, Math.min(1, best / T.appealToBuy)) : 1;
+    if (rand() > buyChance) {
+      entry.outcome = 'nothing';
+      tally.nothing++;
+      happySum += HAPPY.nothing;
+      log.push(entry);
+      continue;
+    }
+
     const total = weights.reduce((a, b) => a + b, 0);
-    let roll = Math.random() * total;
+    let roll = rand() * total;
     let chosen = menuAll[menuAll.length - 1];
     for (let j = 0; j < menuAll.length; j++) {
       roll -= weights[j];
       if (roll <= 0) { chosen = menuAll[j]; break; }
     }
-
+    const prof = profiles[chosen];
     const price = prices[chosen] ?? 3;
+    entry.flavor = chosen;
+    entry.price = price;
+
+    // Price too high for this customer? They might walk away.
+    const tolerance = cust.kind === 'fan' ? T.fanTolerance : cust.kind === 'deal' ? T.dealTolerance : 1;
+    const limit = prof.ceiling * tolerance;
+    if (price > limit) {
+      const pWalk = Math.min(T.walkAwayMax, (price / limit - 1) * T.walkAwaySlope);
+      if (rand() < pWalk) {
+        entry.outcome = 'walked';
+        tally.walked++;
+        log.push(entry);
+        continue;
+      }
+    }
+
+    entry.outcome = 'bought';
     scoops[chosen] += 1;
     flavorRevenue[chosen] += price;
-    if (Math.random() < 0.33) lollipops += 1;
+    flavorCost[chosen] += prof.cost + (mods[chosen]?.surge || 0);
 
-    if (Math.random() < 0.28) {
-      const tone = priceTone(price, profiles[chosen].ceiling);
-      const pool = tone === 'loved' ? LOVED_QUOTES : tone === 'mixed' ? MIXED_QUOTES : COMPLAINT_QUOTES;
-      const name = CUSTOMER_NAMES[Math.floor(Math.random() * CUSTOMER_NAMES.length)];
-      reactions.push({
-        name,
-        initials: name.split(' ').map((p) => p[0]).join(''),
-        tone,
-        quote: pool[Math.floor(Math.random() * pool.length)].replace('{f}', chosen),
-      });
+    let tone = priceTone(price, prof.ceiling * (cust.kind === 'fan' ? T.fanTolerance : 1));
+    if (mods[chosen]?.flop && rand() < 0.5) tone = 'flop';
+    entry.tone = tone;
+    tally[tone]++;
+    const h = HAPPY[tone];
+    happySum += h;
+    flavorHappy[chosen] += h;
+    if (tone === 'loved' || tone === 'mixed') {
+      // Regulars don't spread the word as much as first-timers do.
+      const w = cust.kind === 'fan' ? T.fanFameWeight : 1;
+      if (prof.exotic) happyExotic += h * w;
+      else happyStd += h * w;
     }
+    if (tone === 'loved') flavorLoved[chosen] += 1;
+
+    const lollyRate = cust.seg === 'kids' ? T.lollipopKidRate : T.lollipopRate;
+    if (rand() < lollyRate) {
+      lollipops += 1;
+      entry.lolly = true;
+    }
+    log.push(entry);
   }
 
+  // ---- speech bubbles -------------------------------------------------------
+  for (const e of log) {
+    let kind;
+    if (e.outcome === 'nothing') kind = 'nothing';
+    else if (e.outcome === 'walked') kind = 'walked';
+    else if (e.tone === 'flop') kind = 'flop';
+    else if (e.kind === 'fan' && rand() < 0.5) kind = 'fan';
+    else if (e.kind === 'deal' && e.tone === 'loved' && rand() < 0.4) kind = 'deal';
+    else if (e.tone === 'loved' && profiles[e.flavor]?.exotic) kind = 'lovedExotic';
+    else kind = e.tone;
+    e.quoteKind = kind;
+    e.quote = quote(kind, rand, e.flavor, e.price);
+  }
+
+  // ---- money -----------------------------------------------------------------
   const scoopRevenue = Object.values(flavorRevenue).reduce((a, b) => a + b, 0);
   const lollipopRevenue = lollipops * LOLLIPOP_PRICE;
-  const revenue = scoopRevenue + lollipopRevenue;
+  const scoopCost = Object.values(flavorCost).reduce((a, b) => a + b, 0);
+  const lollipopCost = lollipops * LOLLIPOP_COST;
+  const served = Object.values(scoops).reduce((a, b) => a + b, 0);
 
-  // Ingredient cost of everything sold today. Profit is what actually banks.
-  let cogs = 0;
-  for (const f of menuAll) cogs += (scoops[f] || 0) * profiles[f].cost * costMult;
-  cogs += lollipops * LOLLIPOP_COST * costMult;
-  const profit = revenue - cogs;
-
-  // --- buzz updates ---
-  const newBuzz = { ...buzz };
-  let buzzingCount = 0;
-  for (const f of featured) {
-    const tone = priceTone(prices[f] ?? 3, profiles[f].ceiling);
-    const sat = satisfactionFactor(tone);
-    let gain = (scoops[f] > 0 ? 0.12 : -0.06) + sat * 0.1 + (event.buzzBonus || 0);
-    if (collabFlavor && f === collabFlavor) gain -= 0.05; // collab hype burns out faster
-    newBuzz[f] = clamp01((newBuzz[f] || 0) + gain);
-    if (newBuzz[f] > 0.65) buzzingCount += 1;
+  // ---- fans & deal hunters for tomorrow ------------------------------------
+  const newFans = { ...fans };
+  for (const f of Object.keys(newFans)) {
+    const decay = menuAll.includes(f) ? T.fanDecayOn : T.fanDecayOff;
+    newFans[f] = newFans[f] * (1 - decay);
+    if (newFans[f] < 0.2) delete newFans[f];
   }
-  for (const f of regular) {
-    if (newBuzz[f]) newBuzz[f] = clamp01(newBuzz[f] - 0.015);
-  }
-
-  // --- satisfaction (for reputation) ---
-  let satSum = 0;
-  let satN = 0;
   for (const f of menuAll) {
-    if (scoops[f] === 0) continue;
-    satSum += satisfactionFactor(priceTone(prices[f] ?? 3, profiles[f].ceiling)) * scoops[f];
-    satN += scoops[f];
-  }
-  const satAvg = satN > 0 ? satSum / satN : 0.5;
-
-  const repGain = Math.round(
-    Math.min(revenue / 60, 2) * 4 + satAvg * 4 + buzzingCount * 2,
-  );
-
-  // --- summary bits ---
-  let bestFlavor = null;
-  for (const f of menuAll) {
-    if (bestFlavor === null || scoops[f] > scoops[bestFlavor]) bestFlavor = f;
+    const prof = profiles[f];
+    const mult = prof.exotic ? T.exoticFanGainMult : T.standardFanGainMult;
+    const loved = flavorLoved[f];
+    const mixedish = Math.max(0, flavorHappy[f] - loved);
+    // There are only so many adventurous people in town: new fans get harder
+    // to win as your fan club fills up.
+    const totalFans = Object.values(newFans).reduce((a, b) => a + b, 0);
+    const room = Math.max(0, 1 - totalFans / T.fanCapTotal);
+    const gain = (loved * T.fanGainLoved + mixedish * T.fanGainMixed) * mult * room;
+    if (gain > 0) newFans[f] = Math.min(T.fanCap, (newFans[f] || 0) + gain);
   }
 
-  const quality =
-    revenue >= 105 ? 'Great day' :
-    revenue >= 60 ? 'Solid day' :
-    revenue >= 35 ? 'Slow day' : 'Tough day';
+  const happyBuyers = tally.loved + tally.mixed;
+  const priceRiseLoss = 1 - dealAppeal; // prices went up → deal hunters drift off
+  let newDealFans = dealFans * (1 - T.dealDecay - 0.35 * priceRiseLoss) + happyBuyers * T.dealGain * dealAppeal;
+  newDealFans = Math.max(0, Math.min(T.dealCap, newDealFans));
 
-  const sampleSize = Math.min(reactions.length, randInt(4, 8));
-  const sampledReactions = reactions.slice(0, sampleSize);
+  // ---- fame from customers -------------------------------------------------
+  const fameFromCustomers =
+    Math.sqrt(happyStd) * T.fameHappyStd +
+    happyExotic * T.fameHappyExotic +
+    tally.grumble * T.fameGrumble +
+    tally.walked * T.fameWalkAway;
 
+  const customers = queue.length;
   return {
-    customerCount,
+    customers,
+    walkIns,
+    fanVisits: queue.filter((q) => q.kind === 'fan').length,
+    dealVisits: dealCount,
+    served,
+    tally,
+    happiness: customers > 0 ? happySum / customers : 0,
+    avgPrice,
     scoops,
     flavorRevenue,
+    flavorCost,
     lollipops,
     lollipopRevenue,
-    revenue,
-    cogs,
-    profit,
-    bestFlavor,
-    quality,
-    reactions: sampledReactions,
-    newBuzz,
-    repGain,
-    satAvg,
+    lollipopCost,
+    scoopRevenue,
+    scoopCost,
+    log,
+    newFans,
+    newDealFans,
+    fameFromCustomers,
   };
-}
-
-function clamp01(x) {
-  return Math.max(0, Math.min(1, x));
-}
-
-export function eventRecap(event, result) {
-  const expected = Math.round(18 * event.mult);
-  const diff = result.customerCount - expected;
-  const eventBit =
-    event.type === 'great' || event.type === 'good'
-      ? `"${event.title}" promised a busy day`
-      : event.type === 'bad'
-        ? `"${event.title}" meant a quieter day`
-        : `"${event.title}" suggested an ordinary day`;
-  if (Math.abs(diff) <= 3) return `${eventBit}, and that's about how it went — ${result.customerCount} customers came through.`;
-  if (diff > 3) return `${eventBit}, and it turned out even busier — ${result.customerCount} customers came through.`;
-  return `${eventBit}, but it ran a little lighter than expected — ${result.customerCount} customers came through.`;
 }

@@ -1,378 +1,291 @@
-import { useEffect, useState } from 'react';
-import { loadStore, persistStore, genId } from './game/storage.js';
-import { eventForDay, rollIncident } from './game/events.js';
-import { simulateDay } from './game/simulate.js';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  tierIndexForScore, milestoneText, CHANNEL_NAMES, COLLAB_FLAVOR_IDEAS,
-} from './game/reputation.js';
-import { randInt, pick } from './game/rng.js';
-import { DEFAULT_PRICE } from './game/flavors.js';
-import Setup from './components/Setup.jsx';
-import ProfileSelect from './components/ProfileSelect.jsx';
-import DayOpen from './components/DayOpen.jsx';
-import Results from './components/Results.jsx';
-import SeasonEnd from './components/SeasonEnd.jsx';
+  loadStore, saveStore, newProfile, exportProfileText, backupFileName, parseImport,
+  getDevicePrefs, setDevicePrefs,
+} from './storage/storage.js';
+import * as E from './game/engine.js';
+import { TUNING } from './game/tuning.js';
+import { newSeed } from './game/rng.js';
+import { makeVaultFlavor, profileFor } from './game/flavors.js';
+import {
+  ambitionProgress, ambitionTitle, gradeFor, reportLines,
+} from './game/ambitions.js';
+import { setMuted, unlockAudio } from './audio/sound.js';
+import PlayerPicker from './ui/PlayerPicker.jsx';
+import NewPlayer from './ui/NewPlayer.jsx';
+import SeasonStart from './ui/SeasonStart.jsx';
+import SeasonReport from './ui/SeasonReport.jsx';
+import TopBar from './ui/TopBar.jsx';
+import Parlor from './ui/Parlor.jsx';
+import DayShow from './ui/DayShow.jsx';
+import DayReport from './ui/DayReport.jsx';
+import Settings from './ui/Settings.jsx';
+import { Modal } from './ui/common.jsx';
+import { AmbitionCard } from './ui/Parlor.jsx';
 
-const SEASON_LENGTH = 30;
-
-function clamp01(x) {
-  return Math.max(0, Math.min(1, x));
+function download(name, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function newSeasonState(seasonNumber, vault, prices, easyMode = false) {
+// Snapshot a finished season as a shelf card.
+function makeCard(season, vault) {
+  const prog = ambitionProgress(season, TUNING);
+  const meta = Object.fromEntries(vault.map((v) => [v.name, v]));
   return {
-    seasonNumber,
-    seasonSeed: Math.floor(Math.random() * 1e9),
-    easyMode,
-    day: 1,
-    phase: 'day',
-    cash: 0,
-    repScore: 0,
-    vault: [...vault],
-    menu: { regular: vault.slice(0, 5), featured: [] },
-    prices: { ...prices },
-    buzz: {},
-    everFeatured: {},
-    history: [],
-    allTimeScoops: {},
-    totalCustomers: 0,
-    bestDay: null,
-    activeShock: null,
-    activeDip: null,
-    incident: null,
-    inventionDay: randInt(10, 20),
-    inventionDone: false,
-    collab: null,
-    collabPending: null,
-    lastResult: null,
+    number: season.number,
+    ambition: season.ambition,
+    title: ambitionTitle(season.ambition),
+    pct: prog?.pct ?? 0,
+    grade: gradeFor(prog?.pct ?? 0),
+    parts: prog?.parts ?? [],
+    finalCash: season.cash,
+    finalFame: season.fame,
+    tierMax: season.tierMax,
+    served: season.stats.served,
+    topFlavors: E.topFlavors(season.stats.scoops, 5).map((t) => ({
+      ...t,
+      color: meta[t.flavor]?.color,
+      icon: meta[t.flavor]?.icon,
+    })),
+    lines: reportLines(season, TUNING),
+    history: season.history.map((h) => ({ day: h.day, cash: h.cash, fame: h.fame, profit: h.profit })),
+    mood: season.schedule.mood,
+    finishedAt: Date.now(),
   };
 }
 
 export default function App() {
   const [store, setStore] = useState(() => loadStore());
   const [creating, setCreating] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [viewCard, setViewCard] = useState(null);
+  const [showAmbition, setShowAmbition] = useState(false);
+  const [prefs, setPrefs] = useState(() => getDevicePrefs());
 
+  // Autosave on every change.
   useEffect(() => {
-    persistStore(store);
+    saveStore(store);
   }, [store]);
 
-  const active = store.activeId ? store.profiles[store.activeId] : null;
-  const c = active?.current;
+  useEffect(() => {
+    setMuted(!!prefs.muted);
+    setDevicePrefs(prefs);
+  }, [prefs]);
 
-  // Patch the active profile's current season state.
-  function update(patch) {
+  const profile = store.activeId ? store.profiles[store.activeId] : null;
+  const season = profile?.season ?? null;
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('helper', profile?.mode === 'helper');
+  }, [profile?.mode]);
+
+  const ctx = useMemo(
+    () => (profile ? { vault: profile.vault, mode: profile.mode, dailyPricing: !!profile.dailyPricing, T: TUNING } : null),
+    [profile],
+  );
+
+  function patchProfile(id, fn) {
     setStore((s) => {
-      const id = s.activeId;
-      const prof = s.profiles[id];
-      return {
-        ...s,
-        profiles: { ...s.profiles, [id]: { ...prof, current: { ...prof.current, ...patch } } },
-      };
+      const p = s.profiles[id];
+      if (!p) return s;
+      const next = { ...fn(p), updatedAt: Date.now() };
+      return { ...s, profiles: { ...s.profiles, [id]: next } };
     });
   }
+  const patchActive = (fn) => patchProfile(store.activeId, fn);
+  const updateSeason = (fn) => patchActive((p) => ({ ...p, season: fn(p.season, p) }));
+  const ctxOf = (p) => ({ vault: p.vault, mode: p.mode, dailyPricing: !!p.dailyPricing, T: TUNING });
 
-  function handleSetup(parlorName, vault, easyMode) {
-    const prices = Object.fromEntries(vault.map((f) => [f, DEFAULT_PRICE]));
-    const id = genId();
-    const profile = {
-      id, parlorName, easyMode, createdAt: Date.now(),
-      seasons: [], current: newSeasonState(1, vault, prices, easyMode),
-    };
-    setStore((s) => ({ ...s, activeId: id, profiles: { ...s.profiles, [id]: profile } }));
+  // ---- profile actions ------------------------------------------------------
+  function createPlayer(data) {
+    const p = newProfile(data);
+    setStore((s) => ({ ...s, activeId: p.id, profiles: { ...s.profiles, [p.id]: p } }));
     setCreating(false);
   }
-
-  function selectProfile(id) {
+  const selectPlayer = (id) => {
+    unlockAudio();
     setStore((s) => ({ ...s, activeId: id }));
-  }
-
-  function switchPlayer() {
+  };
+  const switchPlayer = () => {
+    setSettings(false);
+    setViewCard(null);
     setStore((s) => ({ ...s, activeId: null }));
-  }
-
-  function deleteProfile(id) {
+  };
+  const renamePlayer = (id, parlorName) => patchProfile(id, (p) => ({ ...p, parlorName }));
+  const deletePlayer = (id) =>
     setStore((s) => {
       const profiles = { ...s.profiles };
       delete profiles[id];
-      return { activeId: s.activeId === id ? null : s.activeId, profiles };
+      return { ...s, activeId: s.activeId === id ? null : s.activeId, profiles };
     });
-  }
-
-  // Merge parlors from a pasted save code into this browser's store. Used to
-  // reunite parlors that got stranded on a different port/address. Additive:
-  // never deletes existing parlors. Returns how many were added.
-  function importProfiles(code) {
-    let incoming;
-    try {
-      incoming = JSON.parse(code.trim());
-    } catch {
-      throw new Error("That doesn't look like a valid save code.");
-    }
-    // Accept a whole store {profiles:{...}}, a bare {id:profile} map, or an array.
-    let list;
-    if (Array.isArray(incoming)) list = incoming;
-    else if (incoming.profiles) list = Object.values(incoming.profiles);
-    else list = Object.values(incoming);
-    const valid = list.filter((p) => p && p.id && p.parlorName && p.current);
-    if (valid.length === 0) throw new Error('No parlors found in that code.');
+  const exportPlayer = (id) => {
+    const p = store.profiles[id];
+    if (p) download(backupFileName(p), exportProfileText(p));
+  };
+  const importPlayers = (text) => {
+    const list = parseImport(text);
     setStore((s) => {
       const profiles = { ...s.profiles };
-      for (const p of valid) profiles[p.id] = p;
+      for (const p of list) profiles[p.id] = p;
       return { ...s, profiles };
     });
-    return valid.length;
+    return list.length;
+  };
+
+  // ---- season actions -------------------------------------------------------
+  function startSeason(ambition) {
+    patchActive((p) => ({
+      ...p,
+      seasonCount: (p.seasonCount || 0) + 1,
+      season: E.createSeason({ number: (p.seasonCount || 0) + 1, seed: newSeed(), vault: p.vault, ambition, T: TUNING }),
+    }));
   }
 
-  function exportStore() {
-    return JSON.stringify(store);
-  }
+  const actions = {
+    setMenu: (menu) => updateSeason((s) => E.setMenu(s, menu)),
+    setPrices: (prices) => updateSeason((s) => E.setPrices(s, prices)),
+    chooseRumor: (day, choice) => updateSeason((s) => E.chooseRumor(s, day, choice)),
+    chooseShock: (choice) => updateSeason((s) => E.chooseShock(s, choice)),
+    invent: (name) =>
+      patchActive((p) => {
+        if (p.vault.some((v) => v.name.toLowerCase() === name.toLowerCase())) {
+          return { ...p, season: E.markInventionDone(p.season, null) };
+        }
+        const vf = makeVaultFlavor(name);
+        return {
+          ...p,
+          vault: [...p.vault, vf],
+          season: E.markInventionDone(p.season, vf.name, profileFor(vf.name)),
+        };
+      }),
+    skipInvention: () => updateSeason((s) => E.markInventionDone(s, null)),
+    runDay: () => updateSeason((s, p) => (s.phase === 'plan' ? E.runDay(s, ctxOf(p)) : s)),
+  };
 
-  function topFlavor(allTimeScoops) {
-    let best = null;
-    for (const [f, n] of Object.entries(allTimeScoops)) {
-      if (best === null || n > allTimeScoops[best]) best = f;
-    }
-    return best;
-  }
-
-  function runDay() {
-    const event = eventForDay(c.seasonSeed, c.day);
-    const dipMult =
-      c.activeDip && c.day >= c.activeDip.startDay && c.day <= c.activeDip.endDay
-        ? c.activeDip.mult
-        : 1;
-    const incidentMult = (c.incident?.effect?.crowdMult || 1) * dipMult;
-
-    const result = simulateDay({
-      regular: c.menu.regular,
-      featured: c.menu.featured,
-      prices: c.prices,
-      buzz: c.buzz,
-      event,
-      repTierIndex: tierIndexForScore(c.repScore),
-      collabFlavor: c.collab?.flavor,
-      easyMode: active.easyMode,
-      incidentMult,
-    });
-
-    const allTimeScoops = { ...c.allTimeScoops };
-    for (const [f, n] of Object.entries(result.scoops)) {
-      allTimeScoops[f] = (allTimeScoops[f] || 0) + n;
-    }
-
-    const oldTier = tierIndexForScore(c.repScore);
-    const newScore = c.repScore + result.repGain;
-    const newTier = tierIndexForScore(newScore);
-
-    const milestones = [];
-    let collabPending = c.collabPending;
-    for (let t = oldTier + 1; t <= newTier; t++) {
-      const channel = pick(CHANNEL_NAMES);
-      milestones.push({ tier: t, text: milestoneText(t, topFlavor(allTimeScoops), channel) });
-      if (t === 5 && !c.collab) {
-        collabPending = { channel, flavor: `${channel}'s ${pick(COLLAB_FLAVOR_IDEAS)}` };
-      }
-    }
-
-    const everFeatured = { ...c.everFeatured };
-    for (const f of c.menu.featured) everFeatured[f] = true;
-
-    const profit = result.profit;
-    const bestDay =
-      !c.bestDay || profit > c.bestDay.profit ? { day: c.day, profit } : c.bestDay;
-
-    update({
-      phase: 'results',
-      cash: c.cash + profit,
-      repScore: newScore,
-      buzz: result.newBuzz,
-      everFeatured,
-      allTimeScoops,
-      totalCustomers: c.totalCustomers + result.customerCount,
-      bestDay,
-      collabPending,
-      history: [...c.history, { day: c.day, profit, revenue: result.revenue, customers: result.customerCount }],
-      lastResult: { day: c.day, event, result, milestones, buzzBefore: c.buzz },
-    });
-  }
+  const finishWatching = () => updateSeason((s) => E.finishWatching(s));
+  const ackMilestones = () =>
+    updateSeason((s) => (s.lastDay ? { ...s, lastDay: { ...s.lastDay, milestonesAcked: true } } : s));
 
   function nextDay() {
-    if (c.day >= SEASON_LENGTH) {
-      finishSeason();
-      return;
-    }
-    const day = c.day + 1;
-    const patch = {
-      day, phase: 'day', collabJustEnded: null, shockJustEnded: null, incident: null,
-    };
-    let menu = { regular: [...c.menu.regular], featured: [...c.menu.featured] };
-    let vault = [...c.vault];
-    const buzz = { ...c.buzz };
-    const prices = { ...c.prices };
-
-    // Expire an ingredient shortage.
-    if (c.activeShock && day > c.activeShock.endDay) {
-      patch.activeShock = null;
-      patch.shockJustEnded = c.activeShock.flavor;
-    } else {
-      patch.activeShock = c.activeShock;
-    }
-
-    // Expire a rival-cart demand dip.
-    let activeDip = c.activeDip && day > c.activeDip.endDay ? null : c.activeDip;
-
-    // Sponsored collab flavor arrives with pre-built buzz.
-    if (c.collabPending) {
-      const { flavor, channel } = c.collabPending;
-      vault.push(flavor);
-      buzz[flavor] = 0.7;
-      prices[flavor] = 4.0;
-      if (menu.featured.length < 2) menu.featured.push(flavor);
-      patch.collab = { flavor, channel, endDay: day + 4 };
-      patch.collabPending = null;
-    } else if (c.collab && day > c.collab.endDay) {
-      vault = vault.filter((f) => f !== c.collab.flavor);
-      menu.regular = menu.regular.filter((f) => f !== c.collab.flavor);
-      menu.featured = menu.featured.filter((f) => f !== c.collab.flavor);
-      patch.collab = null;
-      patch.collabJustEnded = c.collab.flavor;
-    }
-
-    // Roll a surprise incident for the new day and apply its effect.
-    const inc = rollIncident(active.easyMode, day);
-    if (inc) {
-      const applied = { id: inc.id, kind: inc.kind, title: inc.title, desc: inc.desc, effect: {} };
-      let took = true;
-
-      if (inc.effect.crowdMult) applied.effect.crowdMult = inc.effect.crowdMult;
-
-      if (inc.effect.buzzSpike) {
-        const target = menu.featured[0];
-        if (target) {
-          buzz[target] = clamp01((buzz[target] || 0) + inc.effect.buzzSpike);
-          applied.flavor = target;
-        }
+    patchActive((p) => {
+      const s = p.season;
+      if (!s || s.phase !== 'report') return p;
+      const next = E.advanceDay(s, ctxOf(p));
+      if (next.phase === 'over') {
+        // Put the card on the shelf right away so a refresh can't lose it.
+        const card = makeCard(next, p.vault);
+        return { ...p, shelf: [...p.shelf.filter((c) => c.number !== card.number), card], season: { ...next, cardSaved: true } };
       }
-
-      if (inc.effect.shortage) {
-        if (!patch.activeShock && menu.regular.length > 0) {
-          const flavor = pick(menu.regular);
-          const dur = randInt(inc.effect.shortage.days[0], inc.effect.shortage.days[1]);
-          patch.activeShock = { flavor, startDay: day, endDay: day + dur - 1 };
-          menu.regular = menu.regular.filter((f) => f !== flavor);
-          applied.flavor = flavor;
-          applied.until = day + dur;
-        } else {
-          took = false; // can't apply a shortage right now — skip the incident
-        }
-      }
-
-      if (inc.effect.dip) {
-        if (!activeDip) {
-          const dur = randInt(inc.effect.dip.days[0], inc.effect.dip.days[1]);
-          activeDip = { startDay: day, endDay: day + dur - 1, mult: inc.effect.dip.mult };
-          applied.until = day + dur;
-        } else {
-          took = false;
-        }
-      }
-
-      if (took) patch.incident = applied;
-    }
-
-    patch.activeDip = activeDip;
-    update({ ...patch, menu, vault, buzz, prices });
-  }
-
-  function finishSeason() {
-    const tops = Object.entries(c.allTimeScoops)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([flavor, scoops]) => ({ flavor, scoops }));
-    const summary = {
-      seasonNumber: c.seasonNumber,
-      finalCash: c.cash,
-      totalCustomers: c.totalCustomers,
-      bestDay: c.bestDay,
-      finalTier: tierIndexForScore(c.repScore),
-      topFlavors: tops,
-    };
-    setStore((s) => {
-      const id = s.activeId;
-      const prof = s.profiles[id];
-      return {
-        ...s,
-        profiles: {
-          ...s.profiles,
-          [id]: {
-            ...prof,
-            seasons: [...prof.seasons, summary],
-            current: { ...prof.current, phase: 'end', summary },
-          },
-        },
-      };
+      return { ...p, season: next };
     });
+    window.scrollTo?.({ top: 0, behavior: 'smooth' });
   }
 
-  function startNewSeason() {
-    const vault = c.collab ? c.vault.filter((f) => f !== c.collab.flavor) : c.vault;
-    update(newSeasonState(c.seasonNumber + 1, vault, c.prices, active.easyMode));
-  }
+  const closeSeason = () => patchActive((p) => ({ ...p, season: null }));
 
-  function inventFlavor(name) {
-    update({
-      vault: [...c.vault, name],
-      prices: { ...c.prices, [name]: DEFAULT_PRICE },
-      inventionDone: true,
-    });
-  }
+  // ---- routing --------------------------------------------------------------
+  const toggleMute = () => {
+    unlockAudio();
+    setPrefs((x) => ({ ...x, muted: !x.muted }));
+  };
 
-  // --- routing ---
-  if (!active) {
-    const profileCount = Object.keys(store.profiles).length;
-    if (creating || profileCount === 0) {
+  if (!profile) {
+    const list = Object.values(store.profiles);
+    if (creating || list.length === 0) {
       return (
-        <Setup
-          onComplete={handleSetup}
-          onCancel={profileCount > 0 ? () => setCreating(false) : null}
-        />
+        <main className="app app-plain">
+          <NewPlayer onDone={createPlayer} onCancel={list.length ? () => setCreating(false) : null} />
+        </main>
       );
     }
     return (
-      <ProfileSelect
-        profiles={Object.values(store.profiles)}
-        onSelect={selectProfile}
-        onNew={() => setCreating(true)}
-        onDelete={deleteProfile}
-        onImport={importProfiles}
-        onExport={exportStore}
-      />
+      <main className="app app-plain">
+        <PlayerPicker
+          profiles={list}
+          onSelect={selectPlayer}
+          onNew={() => setCreating(true)}
+          onRename={renamePlayer}
+          onDelete={deletePlayer}
+          onImport={importPlayers}
+          onExport={exportPlayer}
+        />
+      </main>
     );
   }
 
-  if (c.phase === 'end') {
-    return (
-      <SeasonEnd
-        parlorName={active.parlorName}
-        summary={c.summary}
-        onNewSeason={startNewSeason}
-        onSwitch={switchPlayer}
+  const helper = profile.mode === 'helper';
+  let body;
+  if (viewCard) {
+    body = <SeasonReport card={viewCard} onClose={() => setViewCard(null)} helper={helper} startCash={TUNING.startCash} />;
+  } else if (!season) {
+    body = (
+      <SeasonStart
+        profile={profile}
+        onVault={(vault) => patchActive((p) => ({ ...p, vault }))}
+        onStart={startSeason}
+        onOpenCard={setViewCard}
       />
     );
+  } else if (season.phase === 'over') {
+    const card = profile.shelf.find((c) => c.number === season.number) || makeCard(season, profile.vault);
+    body = (
+      <SeasonReport card={card} onClose={closeSeason} closeLabel={helper ? 'Put it on my shelf ✓' : 'Put it on the shelf ✓'} celebrate helper={helper} startCash={TUNING.startCash} />
+    );
+  } else if (season.phase === 'watch') {
+    body = <DayShow key={season.day} profile={profile} season={season} onDone={finishWatching} />;
+  } else if (season.phase === 'report') {
+    body = <DayReport profile={profile} season={season} ctx={ctx} onNext={nextDay} onAckMilestones={ackMilestones} />;
+  } else {
+    body = <Parlor profile={profile} season={season} ctx={ctx} actions={actions} />;
   }
-  if (c.phase === 'results') {
-    return <Results parlorName={active.parlorName} current={c} onNextDay={nextDay} />;
-  }
+
   return (
-    <DayOpen
-      parlorName={active.parlorName}
-      current={c}
-      onRotate={(menu) => update({ menu })}
-      onPrices={(prices) => update({ prices })}
-      onOpen={runDay}
-      onInvent={inventFlavor}
-      onSkipInvention={() => update({ inventionDone: true })}
-      onSwitch={switchPlayer}
-    />
+    <main className={`app ${helper ? 'is-helper' : ''}`}>
+      <TopBar
+        profile={profile}
+        season={season && season.phase !== 'over' ? season : null}
+        muted={!!prefs.muted}
+        onToggleMute={toggleMute}
+        onSwitch={switchPlayer}
+        onSettings={() => setSettings(true)}
+        onAmbition={() => setShowAmbition(true)}
+      />
+      {body}
+      {settings && (
+        <Settings
+          profile={profile}
+          inSeason={!!season && season.phase !== 'over'}
+          onClose={() => setSettings(false)}
+          onPatch={(patch) =>
+            patchActive((p) => ({
+              ...p,
+              ...patch,
+              ...(patch.mode && patch.dailyPricing === undefined ? { dailyPricing: patch.mode === 'standard' } : {}),
+            }))
+          }
+          onVault={(vault) => patchActive((p) => ({ ...p, vault }))}
+          onExport={() => exportPlayer(profile.id)}
+          onOpenCard={(c) => {
+            setSettings(false);
+            setViewCard(c);
+          }}
+          muted={!!prefs.muted}
+          onToggleMute={toggleMute}
+        />
+      )}
+      {showAmbition && season && (
+        <Modal onClose={() => setShowAmbition(false)} label="Season goal">
+          <AmbitionCard season={season} T={TUNING} helper={helper} />
+        </Modal>
+      )}
+    </main>
   );
 }

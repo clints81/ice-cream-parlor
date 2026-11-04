@@ -1,51 +1,30 @@
 # Ice Cream Parlor 🍦
 
-A 30-day ice cream shop simulation game. Name your parlor, invent your own
-flavors, and run the shop one day at a time — rotating specials, pricing for
-volume vs. margin, riding the buzz, and rolling with whatever the day throws
-at you.
+A 30-day ice cream shop game for kids. Name your parlor, invent your own flavors (and give each one a color), pick a goal for the season, and run the shop one day at a time.
 
-## Run it
+## Start playing
+
+On a Mac, double-click **Start Ice Cream Parlor.command**. Or, in Terminal:
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
-Then open the URL Vite prints (http://localhost:5174). The first start can take
-up to a minute to compile; later starts are quicker.
+The game opens at **http://127.0.0.1:5174**. Bookmark that exact address: saves belong to it. See [docs/HOSTING.md](docs/HOSTING.md) for a free hosted version (GitHub Pages or Netlify), and for how backups work.
 
-Progress saves automatically in the browser (localStorage).
+## How it plays
 
-## Players (multiple saved games)
+- **Who's playing?** Each kid has their own player: an animal buddy, a parlor name, a flavor vault, and a season shelf. Switch players from the top bar at any time. Everything saves as you go.
+- **Pick an ambition** at the start of each season: The Weird Shop, The Crowd-Pleaser, Best Deal in Town, Big Time (get famous), or My Own Goal. Its progress shows all season. The season ends with a report card on the shelf.
+- **Each morning** starts with a forecast (it's usually right), news, and sometimes a rumor to bet on or an ingredient shortage to handle. Then set the chalkboard menu and prices.
+- **Open the shop** and watch the day play out: every customer you see is a real customer from the simulation. Then read the day's report: money in, cost of scoops, shop costs, and what each flavor earned after cost.
+- **Fame** is the star meter in the top bar. Happy customers and fresh specials raise it. Overpricing, a stale menu, and flops lower it. PokéTuber milestones arrive as surprises.
+- **Helper mode** (per player, in Settings) adds one-tap suggestions, "It costs you $1. You charge $3. You keep $2.", optional math questions, and bigger text. It never hides anything.
 
-The first screen is **"Who's playing?"** — each player gets their own parlor,
-flavor vault, and season that save independently. Use **+ New parlor** to add
-one and **✕** to delete one. "Switch player" (in the footer) takes you back to
-the picker without deleting anything.
+## For grown-ups
 
-When you create a parlor you choose a mode:
-
-- **On my own** — the full game, with ingredient costs, pricing decisions, and
-  surprises that can go either way.
-- **Playing together — take it easy** — a gentler version for younger players:
-  no money worries, bigger crowds, and only happy surprises.
-
-## How a day works
-
-1. Read the day's **event** — it tells you what kind of crowd is coming. Each
-   flavor shows a **taste tag** (🍬 sweet, 🍓 fruity, 🍦 creamy, 🍋 sour,
-   🌶️ spicy) so you can match flavors to the crowd (kids love sweet, the
-   adventurous love sour and spicy).
-2. **Rotate flavors**: up to 5 regular + 2 featured specials.
-3. On **pricing days** (Day 1, 8, 15, 22, 29) you set prices. Each flavor shows
-   what it **costs to make** and your **profit per scoop** — price low for
-   volume, or high for margin.
-4. **Open for business.** You bank **profit** (sales minus ingredient costs),
-   not just sales.
-
-Watch for **surprises**: a heat-wave rush or going viral can make your week,
-while a machine breakdown, an ingredient shortage, or a rival cart opening
-nearby can set you back. Each season's weather and surprises are different.
-
-Lollipops are always for sale at $1 — no decisions needed.
+- `npm run sim` runs the balance simulation (see [docs/SIMULATION.md](docs/SIMULATION.md)).
+- `npm run build` makes a static site in `dist/` that works from any web address.
+- Game rules live in `src/game/` (pure JavaScript, shared by the UI and the simulation). All tunable numbers are in `src/game/tuning.js`. Saves go through `src/storage/storage.js` (versioned, with migrations).
+- No network calls, no services: the art is SVG, the sounds are synthesized with WebAudio, and the fonts are bundled.
