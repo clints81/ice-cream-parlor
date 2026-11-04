@@ -35,6 +35,8 @@ Your repository is public, so GitHub Pages is free. Nothing is published until y
 
 Run the workflow again whenever you want to publish a new version. It never runs on its own.
 
+**Blank page?** Check that Pages' Source is **GitHub Actions**, not "Deploy from a branch". The branch option publishes the raw source files, which show up as a blank page.
+
 ## Option 3: Netlify Drop (no GitHub settings at all)
 
 1. In the game folder, run `npm run build`. This makes a `dist` folder.
@@ -51,6 +53,16 @@ Saves are stored **inside the browser, per web address**. That means:
 - Each device (laptop, tablet) has its own saves.
 
 **Backup files are the safety net.** On the "Who's playing?" screen, tap **⋯** on a player and choose **Save a backup file**, or use Settings → Backup. To move a player to a new address, browser, or device, open the game there and use **Open a backup file**. It's worth saving a backup every week or two.
+
+## Setting up each kid's device
+
+Each kid opens the bookmark on their own device and creates their player there. Their saves stay separate automatically.
+
+- **Use the same browser every time.** If the bookmark is in Chrome, always open it in Chrome.
+- **No private or incognito windows.** They throw the save away when closed.
+- **iPad or iPhone: add it to the Home Screen** (Safari → Share → **Add to Home Screen**) and open it from that icon. Safari can delete saved data for a website that hasn't been visited in about a week, and Home Screen apps are, as far as I know, exempt. This hasn't been tested on a real iPad.
+- **Save a backup file every couple of weeks** (⋯ on the player → **Save a backup file**).
+- If two kids share a device, both players can live on it. That's what "Who's playing?" is for.
 
 ## Bringing back the old v1 parlors
 
