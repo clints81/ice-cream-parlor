@@ -6,8 +6,14 @@ There are three ways to play. All of them are free, and none of them need an acc
 
 1. Install Node.js once from [nodejs.org](https://nodejs.org) (the "LTS" button).
 2. Double-click **Start Ice Cream Parlor.command** in the game folder.
-   - The first time, macOS may say it's from an unidentified developer. Right-click the file, choose **Open**, then **Open** again. You only do this once.
    - The first start takes a minute while it sets things up. After that it's a few seconds.
+
+   **If macOS blocks it.** A game downloaded as a ZIP is marked "from the internet," and macOS blocks scripts that aren't signed by an Apple developer. Right-click → Open no longer gets around this on recent macOS. Do one of these:
+   - In Terminal, type `xattr -dr com.apple.quarantine ` (with a space at the end), drag the game folder into the Terminal window, and press Enter. Double-clicking works after that, until you download a new ZIP.
+   - Or double-click once so it gets blocked, then go to **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway**.
+   - Or skip the launcher: open Terminal in the game folder and run `npm install`, then `npm start`.
+
+   Getting the game with `git clone` instead of a ZIP avoids the block entirely, and `git pull` brings in updates.
 3. The game opens in your browser at `http://127.0.0.1:5174`. Keep the little Terminal window open while playing. Close it when you're done.
 
 If you'd rather type, open Terminal in the game folder and run:
