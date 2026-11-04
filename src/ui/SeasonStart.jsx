@@ -4,6 +4,7 @@ import Shelf from './Shelf.jsx';
 import { Btn } from './common.jsx';
 import { AMBITIONS, CUSTOM_METRICS } from '../game/ambitions.js';
 import { tierName } from '../game/fame.js';
+import { profileFor } from '../game/flavors.js';
 
 const ORDER = ['weird', 'crowd', 'deal', 'bigtime', 'custom'];
 
@@ -15,6 +16,7 @@ export default function SeasonStart({ profile, onVault, onStart, onOpenCard }) {
   const [custom, setCustom] = useState({ name: '', metric: 'cash', target: CUSTOM_METRICS.cash.targets[1] });
   const [showVault, setShowVault] = useState(number === 1 ? false : true);
 
+  const exoticCount = profile.vault.filter((v) => profileFor(v.name, v.taste).exotic).length;
   const ready =
     pick &&
     profile.vault.length >= 3 &&
@@ -72,6 +74,14 @@ export default function SeasonStart({ profile, onVault, onStart, onOpenCard }) {
             );
           })}
         </div>
+
+        {pick === 'weird' && exoticCount < 3 && (
+          <div className="amb-config amb-warn">
+            {helper
+              ? `You have ${exoticCount} weird or spicy flavor${exoticCount === 1 ? '' : 's'}. You need 3! Add some, or tap a flavor above and pick 🌀 weird.`
+              : `Heads up: your vault has ${exoticCount} weird or spicy flavor${exoticCount === 1 ? '' : 's'}, and this goal needs 3 on the menu at once. Add some, or open a flavor above and change its taste to 🌀 weird or 🌶️ spicy.`}
+          </div>
+        )}
 
         {pick === 'bigtime' && (
           <div className="amb-config">

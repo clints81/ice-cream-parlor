@@ -124,7 +124,7 @@ export default function DayShow({ profile, season, onDone }) {
           const t0 = INTRO + i * gap;
           const p = (t - t0) / LIFE;
           if (p < 0 || p > 1) return null;
-          const slot = 38 + (i % 3) * 5;
+          const slot = 30 + (i % 3) * 10;
           let x;
           let walking = false;
           let leaving = false;

@@ -569,3 +569,8 @@ html.helper .choice-title { font-size: 1.3rem; }
 .parlor > .scene { aspect-ratio: auto; height: min(50vw, 46vh); min-height: 220px; }
 .parlor > .scene .scene-svg { height: 100%; }
 .open-bar .btn { box-shadow: 0 4px 0 var(--pink-dark), 0 10px 30px rgba(63, 42, 38, 0.25); }
+.avatar-row { flex-wrap: wrap; cursor: default; }
+.avatar-mini-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.avatar-mini { border: 3px solid transparent; border-radius: 50%; background: none; padding: 0; cursor: pointer; line-height: 0; }
+.avatar-mini.on { border-color: var(--pink); }
+.amb-warn { background: var(--sun-soft); border: 2px solid var(--sun); font-weight: 700; }

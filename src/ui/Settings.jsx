@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Btn, Modal } from './common.jsx';
 import VaultEditor from './VaultEditor.jsx';
 import Shelf from './Shelf.jsx';
+import Avatar, { AVATARS } from '../art/Avatar.jsx';
 
 export default function Settings({ profile, inSeason, onClose, onPatch, onVault, onExport, onOpenCard, muted, onToggleMute }) {
   const [tab, setTab] = useState('play');
@@ -23,6 +24,24 @@ export default function Settings({ profile, inSeason, onClose, onPatch, onVault,
 
       {tab === 'play' && (
         <div className="settings-list">
+          <div className="toggle-row avatar-row">
+            <span>
+              <b>My buddy</b>
+            </span>
+            <span className="avatar-mini-grid">
+              {AVATARS.map((a) => (
+                <button
+                  key={a.id}
+                  className={`avatar-mini ${profile.avatar === a.id ? 'on' : ''}`}
+                  onClick={() => onPatch({ avatar: a.id })}
+                  aria-label={a.name}
+                  aria-pressed={profile.avatar === a.id}
+                >
+                  <Avatar id={a.id} size={44} />
+                </button>
+              ))}
+            </span>
+          </div>
           <label className="toggle-row">
             <span>
               <b>Helper mode</b>

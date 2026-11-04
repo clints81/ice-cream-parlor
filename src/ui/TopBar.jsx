@@ -6,6 +6,10 @@ import { SEASON_LENGTH } from '../game/engine.js';
 
 export default function TopBar({ profile, season, muted, onToggleMute, onSwitch, onSettings, onAmbition }) {
   const helper = profile.mode === 'helper';
+  // While the day is playing out, show the morning numbers (no spoilers).
+  if (season?.phase === 'watch' && season.lastDay) {
+    season = { ...season, cash: season.lastDay.cashBefore, fame: season.lastDay.fameBefore };
+  }
   const prog = season ? ambitionProgress(season, TUNING) : null;
   const amb = season?.ambition ? AMBITIONS[season.ambition.id] : null;
   return (
